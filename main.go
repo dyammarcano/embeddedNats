@@ -1,8 +1,8 @@
 package main
 
 import (
-	"embedNats/server"
 	"fmt"
+	natsserver "github.com/dyammarcano/embeddedNats/nats-server"
 	"os"
 	"runtime"
 )
@@ -12,7 +12,7 @@ const (
 )
 
 func main() {
-	ns, err := server.NewNatsServer(serverName)
+	ns, err := natsserver.NewNatsServer(serverName)
 	if err != nil {
 		panic(err)
 	}

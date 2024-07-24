@@ -1,8 +1,10 @@
-package server
+package nats_server
 
 import (
 	"context"
 	"errors"
+	"fmt"
+	"github.com/dyammarcano/embeddedNats/lockedfile"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
 	"os"
@@ -11,10 +13,8 @@ import (
 )
 
 var (
-	ErrServerNotRunning     = server.ErrServerNotRunning
-	ErrServerAlreadyRunning = errors.New("server is already running")
-	storePath               = filepath.Join(os.TempDir(), "store")
-	pidFilePath             = filepath.Join(storePath, "nats.pid")
+	storePath   = filepath.Join(os.TempDir(), "store")
+	pidFilePath = filepath.Join(storePath, "nats.pid")
 )
 
 type NatsServer struct {
@@ -49,23 +49,19 @@ func NewNatsServerContext(ctx context.Context, serverName string) (*NatsServer, 
 	}, nil
 }
 
-// CheckAndStart check if server is running using some network connection, if not then create lock file to prevent multiple instances
-// of the server running, then start the server, if server is already running connect to it.
 func (n *NatsServer) CheckAndStart() error {
-	if n.isRunning() {
-		return nil
+	if tryBecomeLeader(storePath) {
+		n.ns.Start()
+
+		if !n.ns.ReadyForConnections(10 * time.Second) {
+			return errors.New("not ready for connection")
+		}
+
+		go func() {
+			<-n.ctx.Done()
+			n.ns.Shutdown()
+		}()
 	}
-
-	n.ns.Start()
-
-	if !n.ns.ReadyForConnections(10 * time.Second) {
-		return errors.New("not ready for connection")
-	}
-
-	go func() {
-		<-n.ctx.Done()
-		n.ns.Shutdown()
-	}()
 
 	var err error
 	n.nc, err = nats.Connect(n.ns.ClientURL())
@@ -74,12 +70,6 @@ func (n *NatsServer) CheckAndStart() error {
 	}
 
 	return nil
-}
-
-func (n *NatsServer) isRunning() bool {
-	var err error
-	n.nc, err = nats.Connect(n.ns.ClientURL())
-	return err == nil
 }
 
 func (n *NatsServer) GetClient() (*nats.Conn, error) {
@@ -96,4 +86,39 @@ func (n *NatsServer) Close() {
 
 func (n *NatsServer) WaitForShutdown() {
 	n.ns.WaitForShutdown()
+}
+
+func tryBecomeLeader(path string) bool {
+	lockFilePath := filepath.Join(path, "leader.lock")
+
+	if _, err := os.Stat(path); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			os.MkdirAll(path, 0755)
+		}
+	}
+
+	file, err := lockedfile.OpenFile(lockFilePath, os.O_CREATE|os.O_WRONLY, 0666)
+	if err != nil {
+		return false
+	}
+
+	if _, err = file.WriteString("Leader instance\n"); err != nil {
+		file.Close()
+		return false
+	}
+
+	return true
+}
+
+func releaseLeadership(path string) {
+	lockFilePath := filepath.Join(path, "leader.lock")
+
+	file, err := lockedfile.OpenFile(lockFilePath, os.O_WRONLY, 0666)
+	if err != nil {
+		fmt.Println("Error opening log file to release lock:", err)
+		return
+	}
+
+	file.Close()
+	os.Remove(lockFilePath)
 }
