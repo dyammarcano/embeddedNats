@@ -97,6 +97,16 @@ func tryBecomeLeader(path string) bool {
 		}
 	}
 
+	if _, err := os.Stat(lockFilePath); err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return createLeaderLock(lockFilePath)
+		}
+	}
+
+	return checkLeaderLock(lockFilePath)
+}
+
+func createLeaderLock(lockFilePath string) bool {
 	file, err := lockedfile.OpenFile(lockFilePath, os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		return false
@@ -108,6 +118,14 @@ func tryBecomeLeader(path string) bool {
 	}
 
 	return true
+}
+
+func checkLeaderLock(lockFilePath string) bool {
+	if err := os.Remove(lockFilePath); err != nil {
+		return false
+	}
+
+	return createLeaderLock(lockFilePath)
 }
 
 func releaseLeadership(path string) {
