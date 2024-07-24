@@ -7,6 +7,7 @@ import (
 	"github.com/dyammarcano/embeddedNats/lockedfile"
 	"github.com/nats-io/nats-server/v2/server"
 	"github.com/nats-io/nats.go"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"time"
@@ -43,41 +44,71 @@ func NewNatsServerContext(ctx context.Context, serverName string) (*NatsServer, 
 }
 
 func (n *NatsServer) CheckAndStart() error {
-	for {
-		if tryBecomeLeader() {
-			n.ns.Start()
+	if n.tryBecomeLeader() {
+		n.ns.Start()
 
-			if !n.ns.ReadyForConnections(5 * time.Second) {
-				return errors.New("not ready for connection")
-			}
+		slog.Info("NATS server is starting...")
 
-			go func() {
-				<-n.ctx.Done()
-				n.ns.Shutdown()
-			}()
+		if !n.ns.ReadyForConnections(5 * time.Second) {
+			return errors.New("not ready for connection")
 		}
 
-		<-time.After(1 * time.Second) // Give some time to be sure that the server is ready
+		slog.Info("NATS server is ready for connection")
 
-		var err error
-		n.nc, err = nats.Connect(n.ns.ClientURL())
-		if err == nil {
-			break
-		}
-
-		fmt.Println("Failed to connect to NATS server, retrying leader election...")
-		time.Sleep(5 * time.Second) // Wait before retrying
+		go func() {
+			<-n.ctx.Done()
+			n.ns.Shutdown()
+		}()
 	}
+
+	<-time.After(1 * time.Second) // Give some time to be sure that the server is ready
+
+	var err error
+	n.nc, err = nats.Connect(n.ns.ClientURL())
+	if err != nil {
+		return err
+	}
+
+	ticker := time.NewTicker(1 * time.Second)
+
+	go func() {
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-n.ctx.Done():
+				n.nc.Close()
+			case <-ticker.C:
+				if n.nc.Status() != nats.CONNECTED {
+					if n.tryBecomeLeader() {
+						n.ns.Start()
+
+						slog.Info("NATS server is starting...")
+
+						if !n.ns.ReadyForConnections(5 * time.Second) {
+							slog.Error("NATS server is not ready for connection")
+						}
+
+						slog.Info("NATS server is ready for connection")
+					}
+				}
+			}
+		}
+	}()
 
 	return nil
 }
 
 func (n *NatsServer) GetClient() (*nats.Conn, error) {
-	if n.nc != nil {
-		return n.nc, nil
+	if n.nc == nil || n.nc.Status() != nats.CONNECTED {
+		slog.Info("NATS client is not connected, checking server status...")
+
+		if err := n.CheckAndStart(); err != nil {
+			return nil, err
+		}
 	}
 
-	return nil, errors.New("client not connected")
+	return n.nc, nil
 }
 
 func (n *NatsServer) Close() {
@@ -88,7 +119,9 @@ func (n *NatsServer) WaitForShutdown() {
 	n.ns.WaitForShutdown()
 }
 
-func tryBecomeLeader() bool {
+func (n *NatsServer) tryBecomeLeader() bool {
+	slog.Info("Trying to become leader...")
+
 	lockFilePath := filepath.Join(storePath, "leader.lock")
 
 	if _, err := os.Stat(storePath); err != nil {
@@ -99,14 +132,16 @@ func tryBecomeLeader() bool {
 
 	if _, err := os.Stat(lockFilePath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return createLeaderLock(lockFilePath)
+			return n.createLeaderLock(lockFilePath)
 		}
 	}
 
-	return checkLeaderLock(lockFilePath)
+	return n.checkLeaderLock(lockFilePath)
 }
 
-func createLeaderLock(lockFilePath string) bool {
+func (n *NatsServer) createLeaderLock(lockFilePath string) bool {
+	slog.Info("Creating leader lock...")
+
 	file, err := lockedfile.OpenFile(lockFilePath, os.O_CREATE|os.O_WRONLY, 0666)
 	if err != nil {
 		return false
@@ -117,13 +152,19 @@ func createLeaderLock(lockFilePath string) bool {
 		return false
 	}
 
+	go func() {
+		<-n.ctx.Done()
+		file.Close()
+	}()
+
 	return true
 }
 
-func checkLeaderLock(lockFilePath string) bool {
+func (n *NatsServer) checkLeaderLock(lockFilePath string) bool {
 	if err := os.Remove(lockFilePath); err != nil {
+		slog.Info("Failed to adquire leader lock...")
 		return false
 	}
 
-	return createLeaderLock(lockFilePath)
+	return n.createLeaderLock(lockFilePath)
 }
