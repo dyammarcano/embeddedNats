@@ -53,7 +53,7 @@ func (n *NatsServer) CheckAndStart() error {
 	if tryBecomeLeader(storePath) {
 		n.ns.Start()
 
-		if !n.ns.ReadyForConnections(10 * time.Second) {
+		if !n.ns.ReadyForConnections(5 * time.Second) {
 			return errors.New("not ready for connection")
 		}
 
@@ -62,6 +62,8 @@ func (n *NatsServer) CheckAndStart() error {
 			n.ns.Shutdown()
 		}()
 	}
+
+	<-time.After(1 * time.Second) // Give some time to be sure that the server is ready
 
 	var err error
 	n.nc, err = nats.Connect(n.ns.ClientURL())
