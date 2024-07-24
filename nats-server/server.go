@@ -12,10 +12,7 @@ import (
 	"time"
 )
 
-var (
-	storePath   = filepath.Join(os.TempDir(), "store")
-	pidFilePath = filepath.Join(storePath, "nats.pid")
-)
+var storePath = filepath.Join(os.TempDir(), "store")
 
 type NatsServer struct {
 	ns  *server.Server
@@ -35,7 +32,6 @@ func NewNatsServerContext(ctx context.Context, serverName string) (*NatsServer, 
 		JetStreamMaxMemory: 1 << 30,
 		JetStreamMaxStore:  1 << 30,
 		StoreDir:           storePath,
-		PidFile:            pidFilePath,
 	}
 
 	nc, err := server.NewServer(opts)
@@ -43,14 +39,11 @@ func NewNatsServerContext(ctx context.Context, serverName string) (*NatsServer, 
 		return nil, err
 	}
 
-	return &NatsServer{
-		ns:  nc,
-		ctx: ctx,
-	}, nil
+	return &NatsServer{ns: nc, ctx: ctx}, nil
 }
 
 func (n *NatsServer) CheckAndStart() error {
-	if tryBecomeLeader(storePath) {
+	if tryBecomeLeader() {
 		n.ns.Start()
 
 		if !n.ns.ReadyForConnections(5 * time.Second) {
@@ -90,12 +83,12 @@ func (n *NatsServer) WaitForShutdown() {
 	n.ns.WaitForShutdown()
 }
 
-func tryBecomeLeader(path string) bool {
-	lockFilePath := filepath.Join(path, "leader.lock")
+func tryBecomeLeader() bool {
+	lockFilePath := filepath.Join(storePath, "leader.lock")
 
-	if _, err := os.Stat(path); err != nil {
+	if _, err := os.Stat(storePath); err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			os.MkdirAll(path, 0755)
+			os.MkdirAll(storePath, 0755)
 		}
 	}
 
@@ -114,7 +107,7 @@ func createLeaderLock(lockFilePath string) bool {
 		return false
 	}
 
-	if _, err = file.WriteString("Leader instance\n"); err != nil {
+	if _, err = file.WriteString(fmt.Sprintf("pid:%d", os.Getpid())); err != nil {
 		file.Close()
 		return false
 	}
@@ -128,17 +121,4 @@ func checkLeaderLock(lockFilePath string) bool {
 	}
 
 	return createLeaderLock(lockFilePath)
-}
-
-func releaseLeadership(path string) {
-	lockFilePath := filepath.Join(path, "leader.lock")
-
-	file, err := lockedfile.OpenFile(lockFilePath, os.O_WRONLY, 0666)
-	if err != nil {
-		fmt.Println("Error opening log file to release lock:", err)
-		return
-	}
-
-	file.Close()
-	os.Remove(lockFilePath)
 }
