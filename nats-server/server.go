@@ -43,25 +43,30 @@ func NewNatsServerContext(ctx context.Context, serverName string) (*NatsServer, 
 }
 
 func (n *NatsServer) CheckAndStart() error {
-	if tryBecomeLeader() {
-		n.ns.Start()
+	for {
+		if tryBecomeLeader() {
+			n.ns.Start()
 
-		if !n.ns.ReadyForConnections(5 * time.Second) {
-			return errors.New("not ready for connection")
+			if !n.ns.ReadyForConnections(5 * time.Second) {
+				return errors.New("not ready for connection")
+			}
+
+			go func() {
+				<-n.ctx.Done()
+				n.ns.Shutdown()
+			}()
 		}
 
-		go func() {
-			<-n.ctx.Done()
-			n.ns.Shutdown()
-		}()
-	}
+		<-time.After(1 * time.Second) // Give some time to be sure that the server is ready
 
-	<-time.After(1 * time.Second) // Give some time to be sure that the server is ready
+		var err error
+		n.nc, err = nats.Connect(n.ns.ClientURL())
+		if err == nil {
+			break
+		}
 
-	var err error
-	n.nc, err = nats.Connect(n.ns.ClientURL())
-	if err != nil {
-		return err
+		fmt.Println("Failed to connect to NATS server, retrying leader election...")
+		time.Sleep(5 * time.Second) // Wait before retrying
 	}
 
 	return nil
