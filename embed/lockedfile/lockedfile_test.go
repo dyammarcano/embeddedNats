@@ -10,13 +10,12 @@ package lockedfile_test
 
 import (
 	"fmt"
+	"github.com/dyammarcano/embeddedNats/embed/lockedfile"
 	"internal/testenv"
 	"os"
 	"path/filepath"
 	"testing"
 	"time"
-
-	"cmd/go/internal/lockedfile"
 )
 
 func mustTempDir(t *testing.T) (dir string, remove func()) {

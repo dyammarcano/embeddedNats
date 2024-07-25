@@ -1,7 +1,7 @@
 package lockedfile
 
 import (
-	"github.com/dyammarcano/embeddedNats/lockedfile/internal/filelock"
+	"github.com/dyammarcano/embeddedNats/embed/lockedfile/internal/filelock"
 	"io/fs"
 	"os"
 )

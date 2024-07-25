@@ -8,14 +8,13 @@ package filelock_test
 
 import (
 	"fmt"
+	"github.com/dyammarcano/embeddedNats/embed/lockedfile/internal/filelock"
 	"internal/testenv"
 	"os"
 	"path/filepath"
 	"runtime"
 	"testing"
 	"time"
-
-	"cmd/go/internal/lockedfile/internal/filelock"
 )
 
 func lock(t *testing.T, f *os.File) {
